@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CoffeeScale — Panel de monitoreo de inventario para Andina Roasters">
+  <title>CoffeeScale · Andina Roasters</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,300..600,0..100;1,9..144,300..600,0..100&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <div class="app">
+
+    <!-- =====================================================
+         TOP BAR
+         ===================================================== -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand__logo">Coffee<em>Scale</em></span>
+        <span class="brand__sep"></span>
+        <span class="brand__sub">Andina Roasters · Operations</span>
+      </div>
+
+      <div class="topbar__meta">
+        <span class="topbar__live">Live</span>
+        <span class="topbar__clock" id="clock">— : — : —</span>
+        <button class="btn-refresh" id="btn-refresh">
+          <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-3-6.7L21 8M21 3v5h-5"/></svg>
+          Sincronizar
+        </button>
+      </div>
+    </header>
+
+
+    <!-- =====================================================
+         HERO KPIs
+         ===================================================== -->
+    <section class="kpis">
+      <div class="kpi">
+        <div class="kpi__label">
+          <svg viewBox="0 0 24 24"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21V12h6v9"/></svg>
+          Sucursales activas
+        </div>
+        <div class="kpi__value" id="kpi-stores">—</div>
+        <div class="kpi__sub">Piloto · objetivo 1 000</div>
+      </div>
+
+      <div class="kpi">
+        <div class="kpi__label">
+          <svg viewBox="0 0 24 24"><path d="M16 3l-4 8-4-8"/><path d="M2 12h20"/><path d="M5 12v8h14v-8"/></svg>
+          Sacos monitoreados
+        </div>
+        <div class="kpi__value" id="kpi-sacks">—</div>
+        <div class="kpi__sub">Telemetría cada 60 s</div>
+      </div>
+
+      <div class="kpi kpi--alert">
+        <div class="kpi__label">
+          <svg viewBox="0 0 24 24"><path d="M10.3 3.86a2 2 0 013.4 0l8.4 14a2 2 0 01-1.7 3H3.6a2 2 0 01-1.7-3l8.4-14z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+          Alertas activas
+        </div>
+        <div class="kpi__value" id="kpi-alerts">—</div>
+        <div class="kpi__sub">Requieren reposición</div>
+      </div>
+
+      <div class="kpi">
+        <div class="kpi__label">
+          <svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+          Órdenes hoy
+        </div>
+        <div class="kpi__value" id="kpi-orders">—</div>
+        <div class="kpi__sub kpi__sub--honey">Generadas automáticamente</div>
+      </div>
+    </section>
+
+
+    <!-- =====================================================
+         MAIN GRID
+         ===================================================== -->
+    <div class="main-grid">
+
+      <section class="stores">
+        <div class="section-head">
+          <h2 class="section-title">Sucursales</h2>
+          <div class="filters">
+            <button class="filter is-active" data-filter="all">Todas</button>
+            <button class="filter" data-filter="ok">Normal</button>
+            <button class="filter" data-filter="warning">Advertencia</button>
+            <button class="filter" data-filter="critical">Crítico</button>
+          </div>
+        </div>
+
+        <div class="stores-grid" id="stores-grid"></div>
+      </section>
+
+
+      <aside class="side">
+        <div class="panel">
+          <h3 class="panel__title">Telemetría en vivo</h3>
+          <ul class="events" id="events-list"></ul>
+        </div>
+
+        <div class="panel">
+          <h3 class="panel__title">Órdenes recientes</h3>
+          <ul class="orders" id="orders-list"></ul>
+        </div>
+      </aside>
+
+    </div>
+
+
+    <!-- =====================================================
+         FOOTER
+         ===================================================== -->
+    <footer class="colophon">
+      <p class="colophon__lead">
+        <strong>CoffeeScale</strong> opera sobre una arquitectura event-driven y serverless en AWS Free Tier.
+        Cada báscula reporta su peso con firma criptográfica HMAC-SHA256 a través de seis funciones Lambda,
+        cuatro colas SQS y una tabla DynamoDB. El sistema sostiene <strong>10 000 mensajes por minuto</strong>
+        con un costo operativo de <strong>$0.14 mensuales</strong> en MVP.
+      </p>
+
+      <div class="colophon__stats">
+        <div><strong>10 000</strong>req / minuto</div>
+        <div><strong>$0.14</strong>costo MVP</div>
+        <div><strong>99.94%</strong>uptime esperado</div>
+        <div><strong>6</strong>funciones Lambda</div>
+        <div><strong>HMAC</strong>SHA-256</div>
+      </div>
+    </footer>
+
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

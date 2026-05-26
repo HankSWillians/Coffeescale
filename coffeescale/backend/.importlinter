@@ -1,0 +1,48 @@
+[importlinter]
+root_packages =
+    security_validator
+    telemetry_processor
+    order_generator
+    erp_dispatcher
+include_external_packages = True
+
+[importlinter:contract:security-validator-hexagonal]
+name = security_validator: domain no depende de adapters
+type = forbidden
+source_modules =
+    security_validator.domain
+forbidden_modules =
+    security_validator.adapters
+    boto3
+    botocore
+
+[importlinter:contract:telemetry-processor-hexagonal]
+name = telemetry_processor: domain no depende de adapters
+type = forbidden
+source_modules =
+    telemetry_processor.domain
+forbidden_modules =
+    telemetry_processor.adapters
+    boto3
+    botocore
+
+[importlinter:contract:order-generator-hexagonal]
+name = order_generator: domain no depende de adapters
+type = forbidden
+source_modules =
+    order_generator.domain
+forbidden_modules =
+    order_generator.adapters
+    boto3
+    botocore
+
+[importlinter:contract:erp-dispatcher-hexagonal]
+name = erp_dispatcher: domain no depende de adapters
+type = forbidden
+source_modules =
+    erp_dispatcher.domain
+forbidden_modules =
+    erp_dispatcher.adapters
+    boto3
+    botocore
+    urllib3

@@ -1,0 +1,22 @@
+{
+  "name": "coffeescale-simulator",
+  "version": "1.0.0",
+  "description": "Simulador de básculas IoT para CoffeeScale — emula los 10.000 mensajes/min de telemetría con firma HMAC-SHA256",
+  "type": "module",
+  "main": "simulator.js",
+  "bin": {
+    "coffeescale-sim": "./simulator.js"
+  },
+  "scripts": {
+    "start": "node simulator.js",
+    "dev": "node simulator.js --dry-run --verbose --duration 30",
+    "demo": "node simulator.js --stores 5 --devices-per-store 3 --rate 5 --duration 60 --dry-run",
+    "stress": "node simulator.js --stores 1000 --devices-per-store 10 --rate 60 --duration 600"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["iot", "simulator", "hmac", "telemetry", "coffeescale"],
+  "author": "Equipo CoffeeScale — Ingeniería de Software II",
+  "license": "MIT"
+}

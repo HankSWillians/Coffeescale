@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m ruff check src tests)",
+      "Bash(python3 -m ruff check src tests --fix)",
+      "Bash(python3 -m ruff format src tests)",
+      "Bash(python3 -m ruff format --check src tests)",
+      "Bash(python3 -m pytest tests/unit/ -q --no-header)",
+      "Bash(python3 -m bandit -r src -ll)",
+      "Bash(python3 -m importlinter --config .importlinter)",
+      "Bash(lint-imports)",
+      "Bash(python3 -c \"import importlinter.cli; print\\(dir\\(importlinter.cli\\)\\)\")"
+    ]
+  }
+}

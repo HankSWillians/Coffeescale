@@ -1,0 +1,98 @@
+name: Deploy CoffeeScale Backend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci-cd:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required for OIDC AWS authentication
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      # ── Quality Gates (Shift Left) ────────────────────────────────────────
+      - name: Lint (ruff check)
+        run: poetry run ruff check src tests
+
+      - name: Format check (ruff format)
+        run: poetry run ruff format --check src tests
+
+      - name: Architecture contracts (import-linter)
+        run: poetry run lint-imports
+
+      - name: SAST — Bandit
+        run: poetry run bandit -r src -ll -x src/shared/__init__.py
+
+      - name: SAST — Semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/python
+            p/security-audit
+            p/owasp-top-ten
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: SCA — pip-audit
+        run: poetry run pip-audit --ignore-vuln PYSEC-2022-43012
+
+      - name: Tests + Coverage
+        run: poetry run pytest
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: testing
+          AWS_SECRET_ACCESS_KEY: testing
+
+      # ── Build & Deploy (only on push to main) ────────────────────────────
+      - name: Setup SAM CLI
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials (OIDC)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: SAM validate
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: sam validate --lint
+
+      - name: SAM build
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: sam build --use-container
+
+      - name: SAM deploy
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          sam deploy \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --stack-name coffeescale-prod \
+            --parameter-overrides AlertEmail=${{ secrets.ALERT_EMAIL }}
+
+      - name: Smoke test post-deploy
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: ./scripts/smoke-test.sh
+        env:
+          HMAC_SECRET: ${{ secrets.HMAC_SECRET }}
+          STACK_NAME: coffeescale-prod

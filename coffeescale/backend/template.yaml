@@ -1,0 +1,449 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  CoffeeScale Backend — IoT inventory replenishment for Andina Roasters.
+  ADR-001: EDA via SQS. ADR-002: Serverless. ADR-003: Hexagonal in 4 Lambdas.
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email address to receive CloudWatch alarm notifications
+    Default: engineering@andinaroasters.co
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+      - arm64
+    MemorySize: 256
+    Timeout: 30
+    Environment:
+      Variables:
+        INVENTORY_TABLE: !Ref InventoryTable
+        ORDERS_TABLE: !Ref OrdersTable
+        TELEMETRY_QUEUE_URL: !Ref TelemetryQueue
+        VALIDATED_QUEUE_URL: !Ref ValidatedTelemetryQueue
+        ORDER_BUFFER_QUEUE_URL: !Ref OrderBufferQueue
+        ERP_DISPATCH_QUEUE_URL: !Ref ErpDispatchQueue
+        NOTIFICATION_QUEUE_URL: !Ref NotificationQueue
+Resources:
+
+  
+
+  # ─── SQS Queues ────────────────────────────────────────────────────────────
+  TelemetryQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: coffeescale-telemetry-queue
+      VisibilityTimeout: 30
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  ValidatedTelemetryQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: coffeescale-validated-telemetry-queue
+      VisibilityTimeout: 30
+      MessageRetentionPeriod: 1209600
+
+  OrderBufferQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: coffeescale-order-buffer
+      VisibilityTimeout: 30
+      MessageRetentionPeriod: 1209600
+
+  ErpDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: coffeescale-erp-dlq
+      MessageRetentionPeriod: 1209600
+
+  ErpDispatchQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: coffeescale-erp-dispatch-queue
+      VisibilityTimeout: 90
+      MessageRetentionPeriod: 1209600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ErpDlq.Arn
+        maxReceiveCount: 5
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: coffeescale-notification-queue
+      VisibilityTimeout: 30
+      MessageRetentionPeriod: 1209600
+
+  # ─── DynamoDB Tables ────────────────────────────────────────────────────────
+  InventoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: inventory
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: device_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: device_id
+          KeyType: HASH
+
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: orders
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: order_id
+          AttributeType: S
+        - AttributeName: dedup_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: order_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      GlobalSecondaryIndexes:
+        - IndexName: dedup-index
+          KeySchema:
+            - AttributeName: dedup_key
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
+
+  # ─── SNS Alert Topic ────────────────────────────────────────────────────────
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: coffeescale-alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  # ─── API Gateway HTTP API ───────────────────────────────────────────────────
+  CoffeeScaleApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 10000
+        ThrottlingRateLimit: 200
+
+  # ─── Lambda 1: ingestion_handler ───────────────────────────────────────────
+  IngestionHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: coffeescale-ingestion-handler
+      CodeUri: src
+      Handler: ingestion_handler.handler.lambda_handler
+      Description: "Receives IoT telemetry via HTTP, enqueues to SQS (ADR-001, ADR-002)"
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt TelemetryQueue.QueueName
+      Events:
+        TelemetryPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoffeeScaleApi
+            Path: /telemetry
+            Method: POST
+    Metadata:
+      BuildMethod: python3.12
+
+  # ─── Lambda 2: security_validator ──────────────────────────────────────────
+  SecurityValidatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: coffeescale-security-validator
+      CodeUri: src/
+      Handler: security_validator.handler.lambda_handler
+      Description: "HMAC-SHA256 validation (ADR-003 Hexagonal, ADR-001 EDA)"
+      Tracing: Active
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt TelemetryQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ValidatedTelemetryQueue.QueueName
+        - SSMParameterReadPolicy:
+            ParameterName: coffeescale/hmac/secret
+        - CloudWatchPutMetricPolicy: {}
+      Events:
+        TelemetryQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TelemetryQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      BuildMethod: python3.12
+
+  # ─── Lambda 3: telemetry_processor ─────────────────────────────────────────
+  TelemetryProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: coffeescale-telemetry-processor
+      CodeUri: src/
+      Handler: telemetry_processor.handler.lambda_handler
+      Description: "Inventory upsert + replenishment decision (ADR-003 Hexagonal)"
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt ValidatedTelemetryQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt OrderBufferQueue.QueueName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InventoryTable
+        - SSMParameterReadPolicy:
+            ParameterName: coffeescale/*
+      Events:
+        ValidatedQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ValidatedTelemetryQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      BuildMethod: python3.12
+
+  # ─── Lambda 4: order_generator ─────────────────────────────────────────────
+  OrderGeneratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: coffeescale-order-generator
+      CodeUri: src/
+      Handler: order_generator.handler.lambda_handler
+      Description: "Creates ReplenishmentOrder in DynamoDB (ADR-003 Hexagonal)"
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt OrderBufferQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ErpDispatchQueue.QueueName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - SSMParameterReadPolicy:
+            ParameterName: coffeescale/buffer_kg
+        - CloudWatchPutMetricPolicy: {}
+      Events:
+        OrderBufferEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt OrderBufferQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      BuildMethod: python3.12
+
+  # ─── Lambda 5: erp_dispatcher (CONCURRENCY = 1) ────────────────────────────
+  ErpDispatcherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: coffeescale-erp-dispatcher
+      CodeUri: src/
+      Handler: erp_dispatcher.handler.lambda_handler
+      Description: "Sequential ERP dispatch — ReservedConcurrentExecutions=1 enforces ≤1 req/s (ADR-002)"
+      MemorySize: 512
+      Timeout: 60
+      Tracing: Active
+      # ADR-002: This is the ONLY acceptable mechanism to cap ERP throughput.
+      # Do NOT remove. LogisCore collapses above 1 req/s.
+      ReservedConcurrentExecutions: 1
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt ErpDispatchQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt NotificationQueue.QueueName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - SSMParameterReadPolicy:
+            ParameterName: coffeescale/erp/url
+        - CloudWatchPutMetricPolicy: {}
+      Events:
+        ErpDispatchEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ErpDispatchQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      BuildMethod: python3.12
+
+  # ─── Lambda 6: notification_emitter ────────────────────────────────────────
+  NotificationEmitterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: coffeescale-notification-emitter
+      CodeUri: src/
+      Handler: notification_emitter.handler.lambda_handler
+      Description: "Sends replenishment email via SES (ADR-001 EDA)"
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt NotificationQueue.QueueName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: "*"
+        - SSMParameterReadPolicy:
+            ParameterName: coffeescale/notification/*
+      Events:
+        NotificationEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      BuildMethod: python3.12
+
+  # ─── Lambda 7: dashboard_api (ADR-004 N-Tier) ──────────────────────────────
+  DashboardApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: coffeescale-dashboard-api
+      CodeUri: src/
+      Handler: dashboard_api.handler.lambda_handler
+      Description: "Read-only dashboard state API — N-Tier (ADR-004)"
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref InventoryTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        DashboardGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoffeeScaleApi
+            Path: /dashboard/state
+            Method: GET
+    Metadata:
+      BuildMethod: python3.12
+
+  # ─── CloudWatch Alarms ──────────────────────────────────────────────────────
+  HighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CoffeeScale-HighErrorRate
+      AlarmDescription: Lambda error rate > 1% for 5 minutes
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertsTopic
+      TreatMissingData: notBreaching
+
+  ERPConcurrencyBreachAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CoffeeScale-ERPConcurrencyBreach
+      AlarmDescription: erp_dispatcher concurrent executions > 1 (should never happen)
+      MetricName: ConcurrentExecutions
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ErpDispatcherFunction
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertsTopic
+      TreatMissingData: notBreaching
+
+  QueueBacklogAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CoffeeScale-QueueBacklog
+      AlarmDescription: Telemetry queue depth > 5000 for 10 minutes
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt TelemetryQueue.QueueName
+      Statistic: Maximum
+      Period: 600
+      EvaluationPeriods: 1
+      Threshold: 5000
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertsTopic
+      TreatMissingData: notBreaching
+
+  SecurityFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CoffeeScale-SecurityFailures
+      AlarmDescription: HMAC validation failures > 100 per minute
+      MetricName: SecurityFailures
+      Namespace: CoffeeScale
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 100
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertsTopic
+      TreatMissingData: notBreaching
+
+  DynamoThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CoffeeScale-DynamoThrottles
+      AlarmDescription: DynamoDB throttled requests detected
+      MetricName: ThrottledRequests
+      Namespace: AWS/DynamoDB
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertsTopic
+      TreatMissingData: notBreaching
+
+  IngestLatencyP99Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CoffeeScale-IngestLatencyP99
+      AlarmDescription: ingestion_handler p99 duration > 5000 ms
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestionHandlerFunction
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5000
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertsTopic
+      TreatMissingData: notBreaching
+
+Outputs:
+  TelemetryEndpoint:
+    Description: POST endpoint for IoT devices
+    Value: !Sub "https://${CoffeeScaleApi}.execute-api.${AWS::Region}.amazonaws.com/prod/telemetry"
+
+  DashboardEndpoint:
+    Description: GET endpoint for the HTML dashboard
+    Value: !Sub "https://${CoffeeScaleApi}.execute-api.${AWS::Region}.amazonaws.com/prod/dashboard/state"
+
+  InventoryTableName:
+    Value: !Ref InventoryTable
+
+  OrdersTableName:
+    Value: !Ref OrdersTable
+
+  AlertsTopicArn:
+    Value: !Ref AlertsTopic

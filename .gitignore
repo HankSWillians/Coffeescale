@@ -1,0 +1,82 @@
+# === Claude Code ===
+.claude/
+.claude-code/
+
+# === Credenciales y secretos (CRÍTICO) ===
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.aws/
+aws-credentials*
+**/secrets.json
+**/credentials.json
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.tox/
+.nox/
+venv/
+.venv/
+env/
+ENV/
+.python-version
+
+# Poetry
+poetry.lock  # decide si lo commiteas; ver nota abajo
+
+# === AWS SAM ===
+.aws-sam/
+samconfig.local.toml
+packaged.yaml
+packaged-*.yaml
+
+# === Node.js (simulador) ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.yarn/
+*.tsbuildinfo
+
+# === IDE / editores ===
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === Logs y temporales ===
+*.log
+logs/
+tmp/
+temp/
+
+# === Artefactos de build ===
+dist/
+build/
+out/
+*.zip
+*.tar.gz
+
+# === Drawio backups ===
+*.drawio.bkp
