@@ -80,3 +80,4 @@ out/
 
 # === Drawio backups ===
 *.drawio.bkp
+.claude/
